@@ -1,12 +1,13 @@
 """Prueba HTTP sobre el contenedor efímero de CI, nunca sobre la base de la demo."""
 
 import json
+import os
 import sys
 import time
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-BASE_URL = "http://127.0.0.1:8000"
+BASE_URL = os.environ.get("INVENTORY_SMOKE_URL", "http://127.0.0.1:8000")
 
 
 def request(path, data=None):
