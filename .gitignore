@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+data/
+*.db
+*.db-*
+
+# Configuración local Docker
+.env
+.env.*
+!.env.example
