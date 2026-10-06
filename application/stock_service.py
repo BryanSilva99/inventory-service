@@ -1,9 +1,11 @@
 from typing import Protocol
+from decimal import Decimal
 from domain.producto_stock import ProductoStock
 
 
 class ProductoRepository(Protocol):
     def buscar_por_id(self, producto_id: int) -> ProductoStock | None: ...
+    def crear(self, producto: ProductoStock) -> ProductoStock: ...
     def guardar(self, producto: ProductoStock) -> None: ...
     def listar(self) -> list[ProductoStock]: ...
 
@@ -12,20 +14,13 @@ class ProductoNoEncontrado(Exception):
     pass
 
 
-class ProductoDuplicado(Exception):
-    pass
-
-
 class StockService:
     def __init__(self, repository: ProductoRepository):
         self.repository = repository
 
-    def crear(self, producto_id: int, nombre: str, stock_disponible: int) -> ProductoStock:
-        producto = ProductoStock(producto_id, nombre, stock_disponible)
-        if self.repository.buscar_por_id(producto_id) is not None:
-            raise ProductoDuplicado("El producto ya existe")
-        self.repository.guardar(producto)
-        return producto
+    def crear(self, nombre: str, precio: Decimal, stock_disponible: int) -> ProductoStock:
+        producto = ProductoStock(None, nombre, precio, stock_disponible)
+        return self.repository.crear(producto)
 
     def consultar(self, producto_id: int) -> ProductoStock:
         producto = self.repository.buscar_por_id(producto_id)

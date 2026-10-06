@@ -1,12 +1,13 @@
 import os
+from decimal import Decimal
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
 from fastapi import Depends, FastAPI, Path as ApiPath, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
-from application.stock_service import StockService, ProductoNoEncontrado, ProductoDuplicado
+from pydantic import BaseModel, ConfigDict, Field, field_validator, field_serializer
+from application.stock_service import StockService, ProductoNoEncontrado
 from domain.producto_stock import ProductoStock, StockInsuficiente
 from infrastructure.repository import abrir_repository, inicializar_db
 
@@ -29,8 +30,16 @@ app.add_middleware(
 
 
 class CrearProductoRequest(BaseModel):
-    model_config = ConfigDict(strict=True)
-    productoId: int = Field(le=9223372036854775807)
+    model_config = ConfigDict(strict=True, extra="forbid")
+    precio: Decimal
+
+    @field_validator("precio", mode="before")
+    @classmethod
+    def precio_json(cls, value):
+        if type(value) not in (int, float):
+            raise ValueError("precio debe ser un número JSON")
+        return Decimal(str(value))
+
     nombre: str
     stockDisponible: int = Field(le=9223372036854775807)
 
@@ -44,11 +53,16 @@ class ProductoResponse(BaseModel):
     productoId: int
     nombre: str
     stockDisponible: int
+    precio: Decimal
+
+    @field_serializer("precio")
+    def precio_numero(self, value) -> float:
+        return float(value)
 
     @classmethod
     def desde(cls, producto: ProductoStock):
         return cls(productoId=producto.producto_id, nombre=producto.nombre,
-                   stockDisponible=producto.stock_disponible)
+                   stockDisponible=producto.stock_disponible, precio=producto.precio)
 
 
 def stock_service():
@@ -65,7 +79,6 @@ async def no_encontrado(request: Request, exc: ProductoNoEncontrado):
     return JSONResponse(status_code=404, content={"error": str(exc)})
 
 
-@app.exception_handler(ProductoDuplicado)
 @app.exception_handler(StockInsuficiente)
 async def conflicto(request: Request, exc: Exception):
     return JSONResponse(status_code=409, content={"error": str(exc)})
@@ -78,7 +91,7 @@ async def datos_invalidos(request: Request, exc: ValueError):
 
 @app.post("/productos", response_model=ProductoResponse, status_code=201)
 def crear(body: CrearProductoRequest, service: Service):
-    return ProductoResponse.desde(service.crear(body.productoId, body.nombre, body.stockDisponible))
+    return ProductoResponse.desde(service.crear(body.nombre, body.precio, body.stockDisponible))
 
 
 @app.get("/productos", response_model=list[ProductoResponse])

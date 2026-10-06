@@ -30,12 +30,12 @@ def main():
     else:
         raise RuntimeError("La API no inició en 90 segundos")
     if mode == "create":
-        status, _ = request("/productos", {"productoId": 1, "nombre": "CI", "stockDisponible": 10})
+        status, _ = request("/productos", {"precio": 4.50, "nombre": "CI", "stockDisponible": 10})
         assert status == 201
         status, product = request("/productos/1/reservar", {"cantidad": 2})
-        assert status == 200 and product["stockDisponible"] == 8
+        assert status == 200 and product["stockDisponible"] == 8 and product["precio"] == 4.5
     status, product = request("/productos/1")
-    assert status == 200 and product["stockDisponible"] == 8
+    assert status == 200 and product["stockDisponible"] == 8 and product["precio"] == 4.5
     status, products = request("/productos")
     assert status == 200 and product in products
     print(f"Smoke {mode}: API correcta, stock persistido = 8")

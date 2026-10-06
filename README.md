@@ -22,10 +22,10 @@ Documentación interactiva de FastAPI: http://127.0.0.1:8000/docs.
 ## Endpoints y demo
 
 ```bash
-# Crear: 201. Utiliza otro ID si el producto ya existe.
+# Crear: 201. SQLite genera el ID.
 curl -i -X POST http://127.0.0.1:8000/productos \
   -H 'Content-Type: application/json' \
-  -d '{"productoId":1,"nombre":"Teclado","stockDisponible":10}'
+  -d '{"nombre":"Teclado","precio":4.50,"stockDisponible":10}'
 
 # Consultar: 200, stock 10
 curl -i http://127.0.0.1:8000/productos/1
@@ -35,9 +35,10 @@ curl -i -X POST http://127.0.0.1:8000/productos/1/reservar \
   -H 'Content-Type: application/json' -d '{"cantidad":2}'
 ```
 
-Producto inexistente: 404. Stock insuficiente o producto duplicado: 409.
+Producto inexistente: 404. Stock insuficiente: 409.
 Datos inválidos de dominio: 400. JSON o tipos inválidos: 422.
-Los campos numéricos del body deben ser enteros, no cadenas ni decimales.
+El stock y la cantidad deben ser enteros. El precio debe ser un número JSON positivo
+finito, con hasta dos decimales (máximo 9999999999.99), nunca una cadena.
 Los identificadores y el stock persistido tienen el límite técnico de los enteros
 SQLite de 64 bits; se valida en la entrada HTTP.
 
@@ -49,7 +50,7 @@ python -m unittest discover -s tests -v
 python -m pip check
 ```
 
-Ocho pruebas verifican creación, ID/nombre válidos, stock no negativo,
+Las pruebas verifican creación, ID/nombre válidos, stock no negativo,
 reserva válida, stock insuficiente, cantidades no positivas y listado HTTP.
 También se verificaron los tres endpoints con un servidor real y una base temporal:
 crear con stock 10, reservar 2, comprobar SQLite y reiniciar conservando stock 8.
@@ -60,7 +61,8 @@ La verificación no deja productos de prueba en la base de desarrollo.
 - **Bounded Context:** Inventario tiene modelo y base propios.
 - **Aggregate Root:** `ProductoStock` es la entrada a las reglas de su stock;
   `reservar()` controla los cambios. Sus campos no admiten asignación directa normal.
-- **Invariantes:** ID positivo, nombre no vacío, stock entero no negativo,
+- **Invariantes:** ID positivo tras persistir (None antes de crear), precio Decimal positivo
+  finito con hasta dos decimales, nombre no vacío, stock entero no negativo,
   cantidad de reserva positiva y no superior al disponible.
 - **Lenguaje ubicuo:** `ProductoStock`, `consultar` y `reservar` expresan el dominio.
 - **Responsabilidad única:** dominio valida; `StockService` orquesta;
@@ -106,10 +108,10 @@ instalar curl ni añadir endpoints. Verifica respuesta HTTP, no una consulta SQL
 ### Comprobar HTTP y persistencia en Docker
 
 ```bash
-# Elige un ID nuevo si ya tienes productos en este volumen.
+# El ID lo genera SQLite; usa el recibido en las siguientes consultas.
 curl -i -X POST http://localhost:8000/productos \
   -H 'Content-Type: application/json' \
-  -d '{"productoId":1,"nombre":"Teclado","stockDisponible":10}'
+  -d '{"nombre":"Teclado","precio":4.50,"stockDisponible":10}'
 curl -i http://localhost:8000/productos/1
 curl -i -X POST http://localhost:8000/productos/1/reservar \
   -H 'Content-Type: application/json' -d '{"cantidad":2}'
@@ -144,7 +146,7 @@ Repositorio privado: https://github.com/BryanSilva99/inventory-service.
 El workflow `.github/workflows/inventory.yml` se ejecuta en pull requests a `main`,
 push a `main` y manualmente desde Actions.
 
-- **CI:** instala dependencias, ejecuta las ocho pruebas, construye Docker y prueba
+- **CI:** instala dependencias, ejecuta todas las pruebas, construye Docker y prueba
   creación, reserva, consulta y persistencia después de reiniciar el contenedor.
   Utiliza un volumen temporal independiente de los datos de la demo.
 - **Entrega:** después de CI, los cambios de `main` publican exactamente la imagen
@@ -158,3 +160,61 @@ conectar su runner o sus credenciales. Publicar la imagen no actualiza por sí s
 el servicio que está ejecutándose en la PC de la demo.
 
 Referencia: [publicar imágenes Docker con GitHub Actions](https://docs.github.com/en/actions/tutorials/publish-packages/publish-docker-images).
+
+## Catálogo y precio de venta
+
+Producto: `productoId` generado automáticamente, `nombre`, `precio`, `stockDisponible`.
+`POST /productos` no acepta `productoId`; responde 201 con los cuatro campos.
+GET individual, GET listado y reserva devuelven también precio como número JSON:
+
+```json
+[{"productoId":1,"nombre":"Coca Cola 500 ml","precio":4.50,"stockDisponible":20}]
+```
+
+El dominio utiliza `Decimal`; SQLite guarda `precio_centimos INTEGER` para evitar
+la conversión a REAL que puede producir la afinidad NUMERIC de SQLite. El ID usa
+`INTEGER PRIMARY KEY AUTOINCREMENT`, generado al insertar. Reservar conserva precio.
+Solo el adaptador HTTP serializa el precio a número JSON; React envía un número a Java.
+
+Crear producto → Inventory genera ID.
+Nueva venta → React obtiene producto + precio de Inventory → usuario selecciona
+cantidad → React envía productoId + cantidad + precioUnitario a Orders → Orders
+conserva precioUnitario como precio histórico de la venta.
+
+Inventory mantiene el precio actual del catálogo. Orders conserva el precio unitario aplicado en cada pedido.
+Confirmar un pedido no reserva automáticamente stock.
+
+## Base SQLite anterior sin precio
+
+No existe un sistema de migraciones. Una tabla antigua vacía se recrea automáticamente.
+Si contiene productos, el arranque falla con un mensaje explícito, sin alterar sus datos.
+No se asignan precios ficticios. Para esta demo, respalda y recrea el catálogo con
+precios reales. Detén Inventory antes de respaldar. Para la ruta local por defecto:
+
+```bash
+# Con Inventory detenido; conserva una copia consistente, incluidos datos WAL.
+python - <<'PYCODE'
+import sqlite3
+from pathlib import Path
+source = Path('data/inventory.db')
+backup = Path('data/inventory-antes-precio.db')
+if backup.exists():
+    raise SystemExit('El respaldo ya existe: elige otra ruta')
+with sqlite3.connect(source) as src, sqlite3.connect(backup) as dst:
+    src.backup(dst)
+PYCODE
+# Arranca en un archivo nuevo; no borres la base anterior.
+INVENTORY_DB_PATH="$PWD/data/inventory-con-precio.db" python -m uvicorn api.main:app --host 127.0.0.1 --port 8000
+```
+
+En Docker, detén el servicio y cambia `INVENTORY_DB_PATH` en `.env` a
+`/data/inventory-con-precio.db`; ejecuta `docker compose up -d --build`.
+La base anterior permanece en el volumen. No uses `down -v`.
+Los IDs de un catálogo recreado pueden coincidir con IDs antiguos de Orders:
+revisa las asociaciones históricas antes de reutilizarlo en una demo con pedidos.
+Si debes conservar esos vínculos, hace falta una migración manual con precios reales
+y preservación de IDs; este cambio no la ejecuta.
+
+El cambio conserva rutas y métodos. Una integración AWS API Gateway HTTP proxy
+que pasa JSON no necesita cambios; si hay modelos de validación o plantillas de
+mapeo configurados, actualízalos manualmente al nuevo contrato. No se modificó AWS.
